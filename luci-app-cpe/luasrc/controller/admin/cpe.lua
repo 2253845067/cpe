@@ -16,6 +16,7 @@ function index()
 	if not nixio.fs.access("/etc/config/modem") then
 		return
 	end
+	entry({"admin", "modem", "modem"}, cbi("cpe/modem"), _("模块设置"), 99) 
 	
 end
 

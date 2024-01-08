@@ -161,33 +161,113 @@ AUTO_CPE()
     }
 	fi
 }
-
+#重新联网
+modem_reset()
+{
+    
+    echo "Abnormal network restart"
+    lsusb=$( lsusb )
+    RDFM650=$(echo "$lsusb" | grep "ID 2cb7:0a05 " | wc -l)
+    echo "RDFM650 $RDFM650"
+	if [ "$RDFM650" == 1 ]; then
+	{
+        GTRNDIS=$(sendat $ATPORT "AT+GTRNDIS=1,1" 500 |grep OK |wc -l) 
+        sleep 2s
+    }
+	else
+	{
+        start="$( /etc/init.d/modem stop )"
+        sleep 2s
+        start="$( /etc/init.d/modem start )"
+        sleep 5s
+    }
+	fi
+}
 #检测SIM卡是否插入,10次检测不到则重启模块
 check_sim()
 {
-    while [ 1 ]
-    do
+	while [ 1 ]
+	do
         enabled=$(uci -q get modem.@ndis[0].enabled)
-        if [ "$enabled" == '1' ] ; then
+        if [ $enabled == '1' ] ;then
             echo "Check the sim"
-            rec=$(sendat 2 "AT+CPIN?")
-            rec1=$(echo $rec | grep "READY" | wc -l)
-            if [ "$rec1" == 1 ]; then
+            rec=$( sendat 2 "AT+CPIN?")
+            rec1=$(echo $rec | grep "READY" | wc -l )
+            if [ $rec1 == 1 ]; then
                 x=0
                 echo "SIM is READY"
             else
                 let x++
-                if [ "$x" == 10 ]; then
-                    echo "SIM abnormal, restarting module using AT command" 
-                    sendat 2 "AT+CFUN=1,1"   # 使用 AT 命令重启模块
+                if [ $x == 10 ]; then
+                    echo "SIM abnormal restart" 
+                    modem_reset	#重启模块
                     x=0
                 fi
             fi
         fi
-        sleep 6s
+		sleep 6s
+	done
+}
+#检测网络状态第一次开机
+chenk_firstdns()
+{
+    while [ 1 ]
+    do
+        enabled=$(uci -q get modem.@ndis[0].enabled)
+        en1=$(uci -q get modem.@ndis[0].en)
+        if [ $enabled == '1' ] ;then
+            if [ $en1 == '1' ] ;then
+                echo "------------------------------开启任务---------------------------"
+                ipadd=$(uci -q get modem.@ndis[0].ipaddress)
+                ping -c 1 -w 1  $ipadd > /dev/null 2>&1
+                if [ $? -eq 0 ];then  
+                    echo "网络连接正常" 
+                    xx=0
+                    return
+                else  
+                    echo "网络连接异常 $ipadd" 
+                    let xx++
+                    let pxx++
+                fi	
+            fi
+            if [ $xx == 5 ];then
+                xx=0
+                modem_reset
+            fi
+            if [ $pxx == 10 ];then
+                xx=0
+                pxx=0
+                return
+            fi
+            echo "------------------------------结束任务---------------------------"
+        fi
+	    sleep 1s
     done
 }
+#检测网络状态
+chenk_dns()
+{
+    en1=$(uci -q get modem.@ndis[0].en)
+    if [ $en1 == '1' ] ;then
+        echo "------------------------------开启任务---------------------------"
+        ipadd=$(uci -q get modem.@ndis[0].ipaddress)
+        ping -c 1 -w 1  $ipadd > /dev/null 2>&1
+        if [ $? -eq 0 ];then  
+            echo "网络连接正常" 
+            xx=0
+        else  
+            echo "网络连接异常 $ipadd 次数$xx" 
+            let xx++
+        fi	
+    fi
+    an=$(uci -q get modem.@ndis[0].an)
+    if [ $xx == $an ];then
+        xx=0
+        modem_reset
+    fi
+    echo "------------------------------结束任务---------------------------"
 
+}
 # 信号任务
 chenk_Task()
 {
@@ -199,10 +279,110 @@ chenk_Task()
             Debug "------------------------------开启任务---------------------------"
             AUTO_CPE
             SETData
+            chenk_dns
             Debug "------------------------------结束任务---------------------------"
         fi
-        sleep 3s
+        sleep 10s
     done
+}
+
+
+#注册网卡
+RegisterNetwork()
+{
+    # ATPORT
+    Debug "RegisterNetwork 注册网卡 $ $MODEMNAME"
+    # if [ "$MODEMNAME" == "FM650CN" ]; then
+    #     getFM650=$(uci -q get network.wwan5g |grep "interface"| wc -l)
+    #     if [ $getFM650 == "0" ] ;then
+    #         uci set network.wwan5g=interface
+    #         uci set network.wwan5g.ifname='usb0'
+    #         uci set network.wwan5g.proto=dhcp
+    #         uci commit network
+            
+    #         uci set firewall.@zone[1].network="wan wan6 wwan5g wwan5g6 wlan"
+    #         uci commit firewall
+
+    #         $(/etc/init.d/network reload)
+    #     fi
+    #     getFM650=$(uci -q get network.wwan5g6|grep "interface"| wc -l)
+    #     if [ $getFM650 == "0" ] ;then
+    #         uci set network.wwan5g6=interface
+    #         uci set network.wwan5g6.ifname='usb0'
+    #         uci set network.wwan5g6.proto='dhcpv6'
+    #         uci set network.wwan5g6.reqaddress='try'
+    #         uci set network.wwan5g6.reqprefix='auto'
+    #         uci set network.wwan5g6._orig_ifname='usb0'
+    #         uci set network.wwan5g6._orig_bridge='false'
+    #         uci set network.wwan5g6.extendprefix='1'
+    #         uci commit network
+    #         uci set firewall.@zone[1].network="wan wan6 wwan wwan5g wwan5g6 wlan"
+    #         uci commit firewall
+    #         $(/etc/init.d/network reload)
+    #     fi
+    # fi
+
+
+
+    if [ $(uci -q get network.wwan5g |grep "interface"| wc -l) == "0" ] ;then
+        uci set network.wwan5g=interface
+        if [ "$MODEMNAME" == "FM650CN" ]; then
+            uci set network.wwan5g.ifname='usb0'
+        else
+            uci set network.wwan5g.ifname='wwan0'
+        fi
+        uci set network.wwan5g.proto=dhcp
+        uci commit network
+        uci set firewall.@zone[1].network="wan wan6 wwan5g wwan5g6 wlan"
+        uci commit firewall
+        $(/etc/init.d/network reload)
+    fi
+    if [ $(uci -q get network.wwan5g6 |grep "interface"| wc -l) == "0" ] ;then
+        uci set network.wwan5g6=interface
+        if [ "$MODEMNAME" == "FM650CN" ]; then
+            uci set network.wwan5g6.ifname='usb0'
+            uci set network.wwan5g6._orig_ifname='usb0'
+        else
+            uci set network.wwan5g6.ifname='wwan0'
+            uci set network.wwan5g6._orig_ifname='wwan0'
+        fi
+        uci set network.wwan5g6.proto='dhcpv6'
+        uci set network.wwan5g6.reqaddress='try'
+        uci set network.wwan5g6.reqprefix='auto'
+        uci set network.wwan5g6._orig_bridge='false'
+	uci set network.wwan5g6.extendprefix='1'
+        uci commit network
+        uci set firewall.@zone[1].network="wan wan6 wwan wwan5g wwan5g6 wlan"
+        uci commit firewall
+        $(/etc/init.d/network reload)
+    fi
+    if [ "$MODEMNAME" == "FM650CN" ]; then
+        if [ $(uci -q get network.wwan5g.ifname |grep "usb0"| wc -l) == "0" ] ;then
+            uci set network.wwan5g.ifname='usb0'
+            uci commit network
+            $(/etc/init.d/network reload)
+        fi
+        if [ $(uci -q get network.wwan5g6.ifname |grep "usb0"| wc -l) == "0" ] ;then
+            uci set network.wwan5g6.ifname='usb0'
+            uci commit network
+            $(/etc/init.d/network reload)
+        fi
+    else
+        if [ $(uci -q get network.wwan5g.ifname |grep "wwan0"| wc -l) == "0" ] ;then
+            uci set network.wwan5g.ifname='wwan0'
+            uci commit network
+            $(/etc/init.d/network reload)
+        fi
+        if [ $(uci -q get network.wwan5g6.ifname |grep "wwan0"| wc -l) == "0" ] ;then
+            uci set network.wwan5g6._orig_ifname='wwan0'
+            uci set network.wwan5g6.ifname='wwan0'
+            uci commit network
+            $(/etc/init.d/network reload)   
+        fi
+    fi
+
+
+
 }
 
 
@@ -217,9 +397,16 @@ first()
     sleep 1s
     # 计算模块AT端口号
     ATPORT
+    # 注册网卡
+    RegisterNetwork
+    # 第一次获取模块信息数据
     AUTO_CPE
     # 保存结构数据
     SETData
+    #开机直接运行网络注册
+    modem_reset
+    # 第一次开机检测是否联网
+    chenk_firstdns
     chenk_Task
 }
 
